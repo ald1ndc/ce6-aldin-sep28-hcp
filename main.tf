@@ -121,7 +121,7 @@ resource "aws_apigatewayv2_api" "http_api" {
   protocol_type = "HTTP"
 }
 
-resource "aws_apigatewayv2_stage" "default" {
+resource "aws_apigatewayv2_stage" "http_api" {
   api_id = aws_apigatewayv2_api.http_api.id
 
   name        = "$default"
@@ -175,4 +175,58 @@ resource "aws_lambda_permission" "api_gw" {
   principal     = "apigateway.amazonaws.com"
 
   source_arn = "${aws_apigatewayv2_api.http_api.execution_arn}/*/*"
+}
+data "aws_route53_zone" "zone" {
+  name = "sctp-sandbox.com"
+}
+
+module "acm" {
+  source  = "terraform-aws-modules/acm/aws"
+  version = "~> 4.0"
+
+  domain_name       = "${local.name_prefix}.sctp-sandbox.com"
+  zone_id           = data.aws_route53_zone.zone.zone_id
+  validation_method = "DNS"
+}
+
+resource "aws_acm_certificate" "http_api" {
+  domain_name       = "${local.name_prefix}.sctp-sandbox.com"
+  validation_method = "DNS"
+
+  tags = {
+    Environment = "test"
+  }
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+resource "aws_apigatewayv2_api_mapping" "http_api" {
+  
+  api_id      = aws_apigatewayv2_api.http_api.id
+  domain_name = aws_apigatewayv2_domain_name.http_api.id
+  stage       = aws_apigatewayv2_stage.http_api.id 
+}
+
+resource "aws_apigatewayv2_domain_name" "http_api" {
+  domain_name = "${local.name_prefix}.sctp-sandbox.com"
+
+  domain_name_configuration {
+    certificate_arn = aws_acm_certificate.http_api.arn
+    endpoint_type   = "REGIONAL"
+    security_policy = "TLS_1_2"
+  }
+}
+
+resource "aws_route53_record" "http_api" {
+  name    = aws_apigatewayv2_domain_name.http_api.domain_name
+  type    = "A"
+  zone_id = data.aws_route53_zone.zone.zone_id
+
+  alias {
+    name                   = aws_apigatewayv2_domain_name.http_api.domain_name_configuration[0].target_domain_name
+    zone_id                = aws_apigatewayv2_domain_name.http_api.domain_name_configuration[0].hosted_zone_id
+    evaluate_target_health = false
+  }
 }
